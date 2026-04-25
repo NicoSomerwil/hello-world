@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension type="plugin" group="content" method="upgrade">
+    <name>plg_content_kveocode</name>
+    <author>KVEO</author>
+    <creationDate>2026</creationDate>
+    <version>1.0.0</version>
+    <description>
+        Beheert EERVOL-artikelen automatisch:
+        - Genereert een unieke, niet te raden code (custom field 'code') op basis van de artikeltitel.
+        - Berekent na elke opslag het custom field 'is-openbaar' voor ALLE EERVOL-artikelen:
+          edities ouder dan de twee meest recente worden automatisch openbaar (volledige PDF vrij).
+
+        Toegangsmodel:
+          Beperkte PDF  → altijd vrij voor iedereen
+          Volledige PDF → achter gedeeld slotje (recente edities) of vrij (oudere edities)
+
+        Vereiste custom fields (com_content.article, categorie alias 'eervol'):
+          Veldnaam        Type        Gebruik
+          code            Tekst       Auto-gevuld door plugin (niet handmatig invullen)
+          editie-nummer   Integer     Volgorde van de editie (1, 2, 3 …)
+          is-openbaar     Checkbox    Auto-gevuld door plugin (niet handmatig invullen)
+          maand           Tekst       Bijv. "Maart"
+          jaar            Integer     Bijv. 2025
+          inhoudsopgave   Textarea    Vrije tekst
+          audio-podcast   URL/Tekst   Embed-code of URL
+          video-podcast   URL/Tekst   Embed-code of URL
+          pdf-leden       Tekst       Bestandsnaam volledige PDF  (bijv. p1qDjEgRAZ-volledig.pdf)
+          pdf-bezoekers   Tekst       Bestandsnaam beperkte PDF   (bijv. p1qDjEgRAZ-beperkt.pdf)
+    </description>
+    <namespace path="src">KveoNl\Plugin\Content\Kveocode</namespace>
+    <files>
+        <folder plugin="kveocode">services</folder>
+        <folder>src</folder>
+    </files>
+</extension>
