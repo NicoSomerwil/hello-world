@@ -94,21 +94,22 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
         $prefix = 'E' . $nummer . '_';
 
         // --- Volledige PDF ---
-        $huidigLeden  = $this->leesWaarde($artikelId, $veldIds[self::FIELD_LEDEN]);
+        // Het document-veld slaat JSON op: {"file":"images/...","linktext":"..."}
+        // We extraheren het pad, verplaatsen het bestand en schrijven de bijgewerkte JSON terug.
+        $rawLeden      = $this->leesRawVeld($artikelId, $veldIds[self::FIELD_LEDEN]);
+        $huidigLeden   = $this->parseerPad($rawLeden);
         $verwachtLeden = self::MAP_VOLLEDIG . '/' . $prefix . $this->genereerCode($titel . ':volledig') . '.pdf';
-        $absLeden     = JPATH_ROOT . '/' . ltrim($huidigLeden, '/');
 
         $this->debug('Volledig PDF', [
-            'huidig'         => $huidigLeden,
+            'raw'            => $rawLeden,
+            'huidig_pad'     => $huidigLeden,
             'verwacht'       => $verwachtLeden,
-            'abs_pad'        => $absLeden,
-            'bestand_bestaat'=> file_exists($absLeden) ? 'JA' : 'NEE',
-            'al_correct'     => ($huidigLeden === $verwachtLeden) ? 'JA' : 'NEE',
+            'bestand_bestaat'=> $huidigLeden && file_exists(JPATH_ROOT . '/' . ltrim($huidigLeden, '/')) ? 'JA' : 'NEE',
         ]);
 
         if ($huidigLeden && $huidigLeden !== $verwachtLeden) {
             if ($this->verplaats($huidigLeden, $verwachtLeden)) {
-                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_LEDEN], $verwachtLeden);
+                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_LEDEN], $this->bijwerkenPad($rawLeden, $verwachtLeden));
                 $this->debug('Volledig PDF verplaatst: OK');
             } else {
                 $this->debug('Volledig PDF verplaatsen MISLUKT');
@@ -116,26 +117,58 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
         }
 
         // --- Beperkte PDF ---
-        $huidigBeperkt  = $this->leesWaarde($artikelId, $veldIds[self::FIELD_BEPERKT]);
+        $rawBeperkt      = $this->leesRawVeld($artikelId, $veldIds[self::FIELD_BEPERKT]);
+        $huidigBeperkt   = $this->parseerPad($rawBeperkt);
         $verwachtBeperkt = self::MAP_BEPERKT . '/' . $prefix . $this->genereerCode($titel . ':beperkt') . '.pdf';
-        $absBeperkt      = JPATH_ROOT . '/' . ltrim($huidigBeperkt, '/');
 
         $this->debug('Beperkt PDF', [
-            'huidig'         => $huidigBeperkt,
+            'raw'            => $rawBeperkt,
+            'huidig_pad'     => $huidigBeperkt,
             'verwacht'       => $verwachtBeperkt,
-            'abs_pad'        => $absBeperkt,
-            'bestand_bestaat'=> file_exists($absBeperkt) ? 'JA' : 'NEE',
-            'al_correct'     => ($huidigBeperkt === $verwachtBeperkt) ? 'JA' : 'NEE',
+            'bestand_bestaat'=> $huidigBeperkt && file_exists(JPATH_ROOT . '/' . ltrim($huidigBeperkt, '/')) ? 'JA' : 'NEE',
         ]);
 
         if ($huidigBeperkt && $huidigBeperkt !== $verwachtBeperkt) {
             if ($this->verplaats($huidigBeperkt, $verwachtBeperkt)) {
-                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_BEPERKT], $verwachtBeperkt);
+                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_BEPERKT], $this->bijwerkenPad($rawBeperkt, $verwachtBeperkt));
                 $this->debug('Beperkt PDF verplaatst: OK');
             } else {
                 $this->debug('Beperkt PDF verplaatsen MISLUKT');
             }
         }
+    }
+
+    /**
+     * Extraheert het bestandspad uit een veldwaarde die JSON kan zijn
+     * ({"file":"images/...","linktext":"..."}) of een gewone string.
+     */
+    private function parseerPad(string $waarde): string
+    {
+        if (empty($waarde)) {
+            return '';
+        }
+
+        $decoded = json_decode($waarde, true);
+        if (is_array($decoded)) {
+            return (string) ($decoded['file'] ?? $decoded['src'] ?? $decoded['value'] ?? $decoded['path'] ?? '');
+        }
+
+        return $waarde;
+    }
+
+    /**
+     * Vervangt het bestandspad in de originele veldwaarde (JSON of string)
+     * zodat de volledige veldstructuur (inclusief linktext) bewaard blijft.
+     */
+    private function bijwerkenPad(string $origineel, string $nieuwPad): string
+    {
+        $decoded = json_decode($origineel, true);
+        if (is_array($decoded)) {
+            $decoded['file'] = $nieuwPad;
+            return json_encode($decoded, JSON_UNESCAPED_SLASHES);
+        }
+
+        return $nieuwPad;
     }
 
     // -------------------------------------------------------------------------
@@ -201,27 +234,35 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
     // -------------------------------------------------------------------------
 
     /**
-     * Leest een veldwaarde. Probeert eerst de DB; als die leeg is (bij eerste
-     * opslag van een nieuw artikel) valt het terug op de POST-data.
-     * Verwerkt ook JSON/array-formaten die sommige veldtypen gebruiken.
+     * Leest de ruwe veldwaarde uit de DB (inclusief JSON-structuur).
+     * Gebruik dit voor document-velden waarbij de JSON intact moet blijven.
+     * Valt terug op POST-data bij eerste opslag van een nieuw artikel.
+     */
+    private function leesRawVeld(int $artikelId, int $veldId): string
+    {
+        $waarde = $this->leesVeldWaarde($artikelId, $veldId);
+
+        if ($waarde === '') {
+            $jcfields = Factory::getApplication()->input->post->get('jcfields', [], 'ARRAY');
+            $rauw     = $jcfields[$veldId] ?? '';
+            $waarde   = is_array($rauw) ? json_encode($rauw) : (string) $rauw;
+        }
+
+        return $waarde;
+    }
+
+    /**
+     * Leest een simpele veldwaarde (integer, tekst) — zonder JSON-parsing.
+     * Gebruik dit voor velden als 'nummer'.
      */
     private function leesWaarde(int $artikelId, int $veldId): string
     {
         $waarde = $this->leesVeldWaarde($artikelId, $veldId);
 
         if ($waarde === '') {
-            // Fallback: POST-data (bij allereerste opslag nieuw artikel)
             $jcfields = Factory::getApplication()->input->post->get('jcfields', [], 'ARRAY');
             $rauw     = $jcfields[$veldId] ?? '';
             $waarde   = is_array($rauw) ? (string) ($rauw[0] ?? '') : (string) $rauw;
-        }
-
-        // Sommige veldtypen slaan JSON op: {"src":"images/...","..."}
-        if (str_starts_with(trim($waarde), '{') || str_starts_with(trim($waarde), '[')) {
-            $decoded = json_decode($waarde, true);
-            if (is_array($decoded)) {
-                $waarde = (string) ($decoded['src'] ?? $decoded['value'] ?? $decoded['path'] ?? $decoded[0] ?? $waarde);
-            }
         }
 
         return $waarde;
