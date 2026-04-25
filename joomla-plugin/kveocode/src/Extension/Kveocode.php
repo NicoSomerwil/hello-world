@@ -10,43 +10,31 @@ use Joomla\Event\SubscriberInterface;
 
 defined('_JEXEC') or die;
 
-/**
- * Hernoemt en verplaatst EERVOL-PDF's automatisch bij het opslaan van een artikel.
- *
- * Workflow voor de beheerder:
- *   1. Upload de twee PDF's met een willekeurige naam naar /images/eervol/
- *   2. Selecteer ze in de velden 'Leden' en 'NIET-leden (beperkt)'
- *   3. Sla het artikel op
- *   → Volledig PDF: /images/eervol/volledig/E{nr}_{code}.pdf
- *   → Beperkt  PDF: /images/eervol/beperkt/E{nr}_{code}.pdf
- *   → Beperkt map:  automatisch opgeschoond, alleen de 3 recentste bewaard
- */
 final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseAwareInterface
 {
     use DatabaseAwareTrait;
 
-    // Moet gelijk zijn aan de SECRET_KEY in de acfphp 'code' veld en in generate_code.php
     private const SECRET_KEY   = 'v3Ry$3cr3t!K3y-Ch4ng3-M3-1n-Pr0d';
     private const ALPHABET     = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     private const CODE_LENGTH  = 10;
 
     private const CATEGORY_ALIAS = 'eervol';
-
-    // Namen van de relevante custom fields
-    private const FIELD_NUMMER  = 'nummer';
-    private const FIELD_LEDEN   = 'leden';
-    private const FIELD_BEPERKT = 'niet-leden-beperkt';
-
-    // Submappen onder /images/eervol/ (relatief aan JPATH_ROOT)
-    private const MAP_VOLLEDIG = 'images/eervol/volledig';
-    private const MAP_BEPERKT  = 'images/eervol/beperkt';
-
-    // Aantal beperkte PDF's bewaren; oudere worden automatisch verwijderd
+    private const FIELD_NUMMER   = 'nummer';
+    private const FIELD_LEDEN    = 'leden';
+    private const FIELD_BEPERKT  = 'niet-leden-beperkt';
+    private const MAP_VOLLEDIG   = 'images/eervol/volledig';
+    private const MAP_BEPERKT    = 'images/eervol/beperkt';
     private const BEWAAR_BEPERKT = 3;
+
+    // Zet op false als alles werkt om het logbestand niet langer te vullen
+    private const DEBUG = true;
+    private const LOG_BESTAND = 'images/eervol/kveocode-debug.log';
 
     public static function getSubscribedEvents(): array
     {
-        return ['onContentAfterSave' => 'handleArticleSave'];
+        // Prioriteit -100: loopt na de Joomla velden-plugin zodat veldwaarden
+        // al in de database staan als wij ze opvragen.
+        return ['onContentAfterSave' => ['handleArticleSave', -100]];
     }
 
     public function handleArticleSave(Event $event): void
@@ -63,7 +51,15 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
         }
 
         $veldIds = $this->getVeldIds();
+
+        $this->debug('=== Artikel opgeslagen ===', [
+            'id'      => $article->id,
+            'titel'   => $article->title,
+            'veldIds' => $veldIds,
+        ]);
+
         if (empty($veldIds)) {
+            $this->debug('FOUT: geen veld-IDs gevonden — controleer veldnamen in Joomla');
             return;
         }
 
@@ -78,11 +74,17 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
     private function verwerkPdfBestanden(int $artikelId, string $titel, array $veldIds): void
     {
         if (!isset($veldIds[self::FIELD_NUMMER], $veldIds[self::FIELD_LEDEN], $veldIds[self::FIELD_BEPERKT])) {
+            $this->debug('FOUT: een of meer veld-IDs ontbreken', $veldIds);
             return;
         }
 
-        $nummer = (int) $this->leesWaarde($artikelId, $veldIds[self::FIELD_NUMMER]);
+        $nummerRauw = $this->leesWaarde($artikelId, $veldIds[self::FIELD_NUMMER]);
+        $nummer     = (int) $nummerRauw;
+
+        $this->debug('Nummer veld', ['rauw' => $nummerRauw, 'als_int' => $nummer]);
+
         if ($nummer === 0 || empty(trim($titel))) {
+            $this->debug('FOUT: nummer is 0 of titel is leeg — artikel goed ingevuld?');
             return;
         }
 
@@ -91,23 +93,47 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
 
         $prefix = 'E' . $nummer . '_';
 
-        // --- Volledige PDF (leden) ---
-        $huidig   = $this->leesWaarde($artikelId, $veldIds[self::FIELD_LEDEN]);
-        $verwacht = self::MAP_VOLLEDIG . '/' . $prefix . $this->genereerCode($titel . ':volledig') . '.pdf';
+        // --- Volledige PDF ---
+        $huidigLeden  = $this->leesWaarde($artikelId, $veldIds[self::FIELD_LEDEN]);
+        $verwachtLeden = self::MAP_VOLLEDIG . '/' . $prefix . $this->genereerCode($titel . ':volledig') . '.pdf';
+        $absLeden     = JPATH_ROOT . '/' . ltrim($huidigLeden, '/');
 
-        if ($huidig && $huidig !== $verwacht) {
-            if ($this->verplaats($huidig, $verwacht)) {
-                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_LEDEN], $verwacht);
+        $this->debug('Volledig PDF', [
+            'huidig'         => $huidigLeden,
+            'verwacht'       => $verwachtLeden,
+            'abs_pad'        => $absLeden,
+            'bestand_bestaat'=> file_exists($absLeden) ? 'JA' : 'NEE',
+            'al_correct'     => ($huidigLeden === $verwachtLeden) ? 'JA' : 'NEE',
+        ]);
+
+        if ($huidigLeden && $huidigLeden !== $verwachtLeden) {
+            if ($this->verplaats($huidigLeden, $verwachtLeden)) {
+                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_LEDEN], $verwachtLeden);
+                $this->debug('Volledig PDF verplaatst: OK');
+            } else {
+                $this->debug('Volledig PDF verplaatsen MISLUKT');
             }
         }
 
-        // --- Beperkte PDF (niet-leden) ---
-        $huidig   = $this->leesWaarde($artikelId, $veldIds[self::FIELD_BEPERKT]);
-        $verwacht = self::MAP_BEPERKT . '/' . $prefix . $this->genereerCode($titel . ':beperkt') . '.pdf';
+        // --- Beperkte PDF ---
+        $huidigBeperkt  = $this->leesWaarde($artikelId, $veldIds[self::FIELD_BEPERKT]);
+        $verwachtBeperkt = self::MAP_BEPERKT . '/' . $prefix . $this->genereerCode($titel . ':beperkt') . '.pdf';
+        $absBeperkt      = JPATH_ROOT . '/' . ltrim($huidigBeperkt, '/');
 
-        if ($huidig && $huidig !== $verwacht) {
-            if ($this->verplaats($huidig, $verwacht)) {
-                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_BEPERKT], $verwacht);
+        $this->debug('Beperkt PDF', [
+            'huidig'         => $huidigBeperkt,
+            'verwacht'       => $verwachtBeperkt,
+            'abs_pad'        => $absBeperkt,
+            'bestand_bestaat'=> file_exists($absBeperkt) ? 'JA' : 'NEE',
+            'al_correct'     => ($huidigBeperkt === $verwachtBeperkt) ? 'JA' : 'NEE',
+        ]);
+
+        if ($huidigBeperkt && $huidigBeperkt !== $verwachtBeperkt) {
+            if ($this->verplaats($huidigBeperkt, $verwachtBeperkt)) {
+                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_BEPERKT], $verwachtBeperkt);
+                $this->debug('Beperkt PDF verplaatst: OK');
+            } else {
+                $this->debug('Beperkt PDF verplaatsen MISLUKT');
             }
         }
     }
@@ -128,14 +154,12 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
             return;
         }
 
-        // Sorteer oplopend op editienummer (uit bestandsnaam: E{nummer}_...)
         usort($bestanden, static function (string $a, string $b): int {
             preg_match('/E(\d+)_/', basename($a), $mA);
             preg_match('/E(\d+)_/', basename($b), $mB);
             return (int) ($mA[1] ?? 0) <=> (int) ($mB[1] ?? 0);
         });
 
-        // Verwijder de oudste; bewaar alleen de BEWAAR_BEPERKT recentste
         $teVerwijderen = array_slice($bestanden, 0, count($bestanden) - self::BEWAAR_BEPERKT);
         foreach ($teVerwijderen as $bestand) {
             @unlink($bestand);
@@ -160,10 +184,16 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
         $absNaar = JPATH_ROOT . '/' . ltrim($naar, '/');
 
         if (!file_exists($absVan)) {
+            $this->debug("verplaats() MISLUKT: bronbestand bestaat niet: {$absVan}");
             return false;
         }
 
-        return rename($absVan, $absNaar);
+        $resultaat = rename($absVan, $absNaar);
+        if (!$resultaat) {
+            $this->debug("rename() MISLUKT: {$absVan} → {$absNaar}");
+        }
+
+        return $resultaat;
     }
 
     // -------------------------------------------------------------------------
@@ -171,19 +201,30 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
     // -------------------------------------------------------------------------
 
     /**
-     * Leest een veldwaarde uit de DB; als die nog leeg is (nieuw artikel, eerste opslag)
-     * valt het terug op de POST-data zodat het ook bij de eerste keer opslaan werkt.
+     * Leest een veldwaarde. Probeert eerst de DB; als die leeg is (bij eerste
+     * opslag van een nieuw artikel) valt het terug op de POST-data.
+     * Verwerkt ook JSON/array-formaten die sommige veldtypen gebruiken.
      */
     private function leesWaarde(int $artikelId, int $veldId): string
     {
-        $opgeslagen = $this->leesVeldWaarde($artikelId, $veldId);
-        if ($opgeslagen !== '') {
-            return $opgeslagen;
+        $waarde = $this->leesVeldWaarde($artikelId, $veldId);
+
+        if ($waarde === '') {
+            // Fallback: POST-data (bij allereerste opslag nieuw artikel)
+            $jcfields = Factory::getApplication()->input->post->get('jcfields', [], 'ARRAY');
+            $rauw     = $jcfields[$veldId] ?? '';
+            $waarde   = is_array($rauw) ? (string) ($rauw[0] ?? '') : (string) $rauw;
         }
 
-        // Fallback: POST-data (Joomla stuurt veldwaarden mee als jcfields[{id}])
-        $jcfields = Factory::getApplication()->input->post->get('jcfields', [], 'ARRAY');
-        return (string) ($jcfields[$veldId] ?? '');
+        // Sommige veldtypen slaan JSON op: {"src":"images/...","..."}
+        if (str_starts_with(trim($waarde), '{') || str_starts_with(trim($waarde), '[')) {
+            $decoded = json_decode($waarde, true);
+            if (is_array($decoded)) {
+                $waarde = (string) ($decoded['src'] ?? $decoded['value'] ?? $decoded['path'] ?? $decoded[0] ?? $waarde);
+            }
+        }
+
+        return $waarde;
     }
 
     private function leesVeldWaarde(int $artikelId, int $veldId): string
@@ -205,7 +246,6 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
     private function schrijfVeldWaarde(int $artikelId, int $veldId, string $waarde): void
     {
         $db = $this->getDatabase();
-
         $db->setQuery(
             $db->getQuery(true)
                 ->delete($db->quoteName('#__fields_values'))
@@ -265,5 +305,28 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
         }
 
         return $code;
+    }
+
+    // -------------------------------------------------------------------------
+    // Debug logging
+    // -------------------------------------------------------------------------
+
+    /** @param array<string,mixed> $data */
+    private function debug(string $bericht, array $data = []): void
+    {
+        if (!self::DEBUG) {
+            return;
+        }
+
+        $regels = [date('[Y-m-d H:i:s]') . ' ' . $bericht];
+        foreach ($data as $sleutel => $waarde) {
+            $regels[] = '  ' . $sleutel . ': ' . (is_array($waarde) ? json_encode($waarde) : $waarde);
+        }
+
+        file_put_contents(
+            JPATH_ROOT . '/' . self::LOG_BESTAND,
+            implode(PHP_EOL, $regels) . PHP_EOL,
+            FILE_APPEND | LOCK_EX
+        );
     }
 }
