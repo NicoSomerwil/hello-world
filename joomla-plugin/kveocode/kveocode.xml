@@ -3,29 +3,26 @@
     <name>plg_content_kveocode</name>
     <author>KVEO</author>
     <creationDate>2026</creationDate>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
     <description>
-        Beheert EERVOL-artikelen automatisch:
-        - Genereert een unieke, niet te raden code (custom field 'code') op basis van de artikeltitel.
-        - Berekent na elke opslag het custom field 'is-openbaar' voor ALLE EERVOL-artikelen:
-          edities ouder dan de twee meest recente worden automatisch openbaar (volledige PDF vrij).
+        Beheert PDF-bestanden van EERVOL-artikelen automatisch bij opslaan:
 
-        Toegangsmodel:
-          Beperkte PDF  → altijd vrij voor iedereen
-          Volledige PDF → achter gedeeld slotje (recente edities) of vrij (oudere edities)
+        1. Hernoemt en verplaatst de volledige PDF naar /images/eervol/volledig/E{nr}_{code}.pdf
+        2. Hernoemt en verplaatst de beperkte PDF naar /images/eervol/beperkt/E{nr}_{code}.pdf
+        3. Ruimt /images/eervol/beperkt/ op: bewaart alleen de 3 meest recente edities.
 
-        Vereiste custom fields (com_content.article, categorie alias 'eervol'):
-          Veldnaam        Type        Gebruik
-          code            Tekst       Auto-gevuld door plugin (niet handmatig invullen)
-          editie-nummer   Integer     Volgorde van de editie (1, 2, 3 …)
-          is-openbaar     Checkbox    Auto-gevuld door plugin (niet handmatig invullen)
-          maand           Tekst       Bijv. "Maart"
-          jaar            Integer     Bijv. 2025
-          inhoudsopgave   Textarea    Vrije tekst
-          audio-podcast   URL/Tekst   Embed-code of URL
-          video-podcast   URL/Tekst   Embed-code of URL
-          pdf-leden       Tekst       Bestandsnaam volledige PDF  (bijv. p1qDjEgRAZ-volledig.pdf)
-          pdf-bezoekers   Tekst       Bestandsnaam beperkte PDF   (bijv. p1qDjEgRAZ-beperkt.pdf)
+        De twee codes per editie zijn cryptografisch onafhankelijk van elkaar: het kennen
+        van de ene bestandsnaam geeft geen aanwijzing over de andere.
+
+        Werkwijze bij een nieuwe editie:
+          1. Upload beide PDF's met willekeurige naam naar /images/eervol/
+          2. Selecteer ze in de velden 'Leden' en 'NIET-leden (beperkt)' van het artikel
+          3. Sla het artikel op — de plugin doet de rest automatisch
+
+        Vereiste custom fields (context: com_content.article, categorie alias 'eervol'):
+          nummer           integer    Editienummer (1, 2, 3 …)
+          leden            document   Volledige PDF — wordt automatisch hernoemd en verplaatst
+          niet-leden-beperkt document Beperkte PDF  — wordt automatisch hernoemd en verplaatst
     </description>
     <namespace path="src">KveoNl\Plugin\Content\Kveocode</namespace>
     <files>

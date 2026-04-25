@@ -1,6 +1,7 @@
 <?php
 namespace KveoNl\Plugin\Content\Kveocode\Extension;
 
+use Joomla\CMS\Factory;
 use Joomla\CMS\Plugin\CMSPlugin;
 use Joomla\Database\DatabaseAwareInterface;
 use Joomla\Database\DatabaseAwareTrait;
@@ -10,36 +11,38 @@ use Joomla\Event\SubscriberInterface;
 defined('_JEXEC') or die;
 
 /**
- * Automatiseert twee dingen voor EERVOL-artikelen:
- *   1. Vult het custom field 'code' eenmalig bij aanmaken van een artikel.
- *   2. Herberekent 'is-openbaar' voor alle EERVOL-edities na elke opslag,
- *      zodat edities ouder dan de twee meest recente automatisch openbaar worden.
+ * Hernoemt en verplaatst EERVOL-PDF's automatisch bij het opslaan van een artikel.
  *
- * De 'code' wordt ook als bestandsnaam-basis gebruikt voor de PDF-bestanden.
- * Gebruik generate_code.php (zelfde SECRET_KEY) om de naam van de PDF-bestanden
- * vooraf te berekenen vóórdat je ze uploadt.
+ * Workflow voor de beheerder:
+ *   1. Upload de twee PDF's met een willekeurige naam naar /images/eervol/
+ *   2. Selecteer ze in de velden 'Leden' en 'NIET-leden (beperkt)'
+ *   3. Sla het artikel op
+ *   → Volledig PDF: /images/eervol/volledig/E{nr}_{code}.pdf
+ *   → Beperkt  PDF: /images/eervol/beperkt/E{nr}_{code}.pdf
+ *   → Beperkt map:  automatisch opgeschoond, alleen de 3 recentste bewaard
  */
 final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseAwareInterface
 {
     use DatabaseAwareTrait;
 
-    // Moet overeenkomen met de SECRET_KEY in generate_code.php.
-    // Vervang dit door een lange willekeurige string en houd hem geheim.
-    private const SECRET_KEY = 'v3Ry$3cr3t!K3y-Ch4ng3-M3-1n-Pr0d';
+    // Moet gelijk zijn aan de SECRET_KEY in de acfphp 'code' veld en in generate_code.php
+    private const SECRET_KEY   = 'v3Ry$3cr3t!K3y-Ch4ng3-M3-1n-Pr0d';
+    private const ALPHABET     = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    private const CODE_LENGTH  = 10;
 
-    private const ALPHABET    = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    private const CODE_LENGTH = 10;
-
-    // Alias van de EERVOL-categorie in Joomla (Componenten → Artikelen → Categorieën)
     private const CATEGORY_ALIAS = 'eervol';
 
-    // Namen van de custom fields die deze plugin beheert
-    private const FIELD_CODE        = 'code';
-    private const FIELD_EDITIE_NR   = 'editie-nummer';
-    private const FIELD_IS_OPENBAAR = 'is-openbaar';
+    // Namen van de relevante custom fields
+    private const FIELD_NUMMER  = 'nummer';
+    private const FIELD_LEDEN   = 'leden';
+    private const FIELD_BEPERKT = 'niet-leden-beperkt';
 
-    // Aantal recente edities dat achter het slotje blijft
-    private const BESCHERMD = 2;
+    // Submappen onder /images/eervol/ (relatief aan JPATH_ROOT)
+    private const MAP_VOLLEDIG = 'images/eervol/volledig';
+    private const MAP_BEPERKT  = 'images/eervol/beperkt';
+
+    // Aantal beperkte PDF's bewaren; oudere worden automatisch verwijderd
+    private const BEWAAR_BEPERKT = 3;
 
     public static function getSubscribedEvents(): array
     {
@@ -64,121 +67,131 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
             return;
         }
 
-        // Stap 1: genereer de code als die nog niet bestaat
-        if (isset($veldIds[self::FIELD_CODE])) {
-            $this->vulCodeIn((int) $article->id, $veldIds[self::FIELD_CODE], $article->title);
-        }
-
-        // Stap 2: herbereken is-openbaar voor alle EERVOL-edities
-        if (isset($veldIds[self::FIELD_EDITIE_NR], $veldIds[self::FIELD_IS_OPENBAAR])) {
-            $this->herbereken($veldIds[self::FIELD_EDITIE_NR], $veldIds[self::FIELD_IS_OPENBAAR]);
-        }
+        $this->verwerkPdfBestanden((int) $article->id, $article->title, $veldIds);
+        $this->ruimBeperktMapOp();
     }
 
-    // --- Stap 1: code genereren ---
+    // -------------------------------------------------------------------------
+    // PDF verwerking
+    // -------------------------------------------------------------------------
 
-    private function vulCodeIn(int $artikelId, int $veldId, string $titel): void
+    private function verwerkPdfBestanden(int $artikelId, string $titel, array $veldIds): void
     {
-        if ($this->leesVeldWaarde($artikelId, $veldId) !== '') {
-            return; // overschrijf nooit een bestaande code
-        }
-
-        $this->schrijfVeldWaarde($artikelId, $veldId, $this->genereerCode($titel));
-    }
-
-    private function genereerCode(string $titel): string
-    {
-        $hash = hash_hmac('sha256', $titel, self::SECRET_KEY, binary: true);
-        $code = '';
-        $len  = strlen(self::ALPHABET);
-
-        for ($i = 0; $i < self::CODE_LENGTH; $i++) {
-            $code .= self::ALPHABET[ord($hash[$i]) % $len];
-        }
-
-        return $code;
-    }
-
-    // --- Stap 2: is-openbaar herberekenen ---
-
-    private function herbereken(int $editieNrVeldId, int $isOpenbaarVeldId): void
-    {
-        $db = $this->getDatabase();
-
-        // Haal alle EERVOL-artikelen op met hun editienummer
-        $query = $db->getQuery(true)
-            ->select([$db->quoteName('a.id'), $db->quoteName('fv.value', 'editie_nr')])
-            ->from($db->quoteName('#__content', 'a'))
-            ->join(
-                'INNER',
-                $db->quoteName('#__categories', 'c')
-                    . ' ON c.id = a.catid AND c.alias = ' . $db->quote(self::CATEGORY_ALIAS)
-            )
-            ->join(
-                'LEFT',
-                $db->quoteName('#__fields_values', 'fv')
-                    . ' ON fv.item_id = a.id AND fv.field_id = ' . $editieNrVeldId
-            );
-
-        $artikelen = $db->setQuery($query)->loadObjectList();
-
-        if (empty($artikelen)) {
+        if (!isset($veldIds[self::FIELD_NUMMER], $veldIds[self::FIELD_LEDEN], $veldIds[self::FIELD_BEPERKT])) {
             return;
         }
 
-        $editienummers = array_map('intval', array_column($artikelen, 'editie_nr'));
-        $maxEditie     = max($editienummers ?: [0]);
+        $nummer = (int) $this->leesWaarde($artikelId, $veldIds[self::FIELD_NUMMER]);
+        if ($nummer === 0 || empty(trim($titel))) {
+            return;
+        }
 
-        foreach ($artikelen as $artikel) {
-            $nr          = (int) $artikel->editie_nr;
-            // Openbaar als het editienummer bekend is én niet bij de meest recente BESCHERMD hoort
-            $isOpenbaar  = ($nr > 0 && $nr <= $maxEditie - self::BESCHERMD) ? '1' : '0';
+        $this->maakMapAan(self::MAP_VOLLEDIG);
+        $this->maakMapAan(self::MAP_BEPERKT);
 
-            $this->schrijfVeldWaarde((int) $artikel->id, $isOpenbaarVeldId, $isOpenbaar);
+        $prefix = 'E' . $nummer . '_';
+
+        // --- Volledige PDF (leden) ---
+        $huidig   = $this->leesWaarde($artikelId, $veldIds[self::FIELD_LEDEN]);
+        $verwacht = self::MAP_VOLLEDIG . '/' . $prefix . $this->genereerCode($titel . ':volledig') . '.pdf';
+
+        if ($huidig && $huidig !== $verwacht) {
+            if ($this->verplaats($huidig, $verwacht)) {
+                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_LEDEN], $verwacht);
+            }
+        }
+
+        // --- Beperkte PDF (niet-leden) ---
+        $huidig   = $this->leesWaarde($artikelId, $veldIds[self::FIELD_BEPERKT]);
+        $verwacht = self::MAP_BEPERKT . '/' . $prefix . $this->genereerCode($titel . ':beperkt') . '.pdf';
+
+        if ($huidig && $huidig !== $verwacht) {
+            if ($this->verplaats($huidig, $verwacht)) {
+                $this->schrijfVeldWaarde($artikelId, $veldIds[self::FIELD_BEPERKT], $verwacht);
+            }
         }
     }
 
-    // --- Database helpers ---
+    // -------------------------------------------------------------------------
+    // Opschonen beperkt-map
+    // -------------------------------------------------------------------------
 
-    private function isEervolCategorie(int $catid): bool
+    private function ruimBeperktMapOp(): void
     {
-        $db    = $this->getDatabase();
-        $catid = (int) $catid;
-        $query = $db->getQuery(true)
-            ->select($db->quoteName('alias'))
-            ->from($db->quoteName('#__categories'))
-            ->where($db->quoteName('id') . ' = ' . $catid);
-
-        return $db->setQuery($query)->loadResult() === self::CATEGORY_ALIAS;
-    }
-
-    /** @return array<string, int> veldnaam => veld-ID */
-    private function getVeldIds(): array
-    {
-        $db    = $this->getDatabase();
-        $namen = [self::FIELD_CODE, self::FIELD_EDITIE_NR, self::FIELD_IS_OPENBAAR];
-
-        $quoted = implode(',', array_map([$db, 'quote'], $namen));
-
-        $query = $db->getQuery(true)
-            ->select([$db->quoteName('id'), $db->quoteName('name')])
-            ->from($db->quoteName('#__fields'))
-            ->where($db->quoteName('name') . ' IN (' . $quoted . ')')
-            ->where($db->quoteName('context') . ' = ' . $db->quote('com_content.article'))
-            ->where($db->quoteName('state') . ' = 1');
-
-        $rijen = $db->setQuery($query)->loadObjectList('name');
-
-        $map = [];
-        foreach ($rijen as $naam => $rij) {
-            $map[$naam] = (int) $rij->id;
+        $map = JPATH_ROOT . '/' . self::MAP_BEPERKT;
+        if (!is_dir($map)) {
+            return;
         }
 
-        return $map;
+        $bestanden = glob($map . '/E*.pdf') ?: [];
+        if (count($bestanden) <= self::BEWAAR_BEPERKT) {
+            return;
+        }
+
+        // Sorteer oplopend op editienummer (uit bestandsnaam: E{nummer}_...)
+        usort($bestanden, static function (string $a, string $b): int {
+            preg_match('/E(\d+)_/', basename($a), $mA);
+            preg_match('/E(\d+)_/', basename($b), $mB);
+            return (int) ($mA[1] ?? 0) <=> (int) ($mB[1] ?? 0);
+        });
+
+        // Verwijder de oudste; bewaar alleen de BEWAAR_BEPERKT recentste
+        $teVerwijderen = array_slice($bestanden, 0, count($bestanden) - self::BEWAAR_BEPERKT);
+        foreach ($teVerwijderen as $bestand) {
+            @unlink($bestand);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bestandssysteem helpers
+    // -------------------------------------------------------------------------
+
+    private function maakMapAan(string $relatief): void
+    {
+        $abs = JPATH_ROOT . '/' . $relatief;
+        if (!is_dir($abs)) {
+            mkdir($abs, 0755, true);
+        }
+    }
+
+    private function verplaats(string $van, string $naar): bool
+    {
+        $absVan  = JPATH_ROOT . '/' . ltrim($van, '/');
+        $absNaar = JPATH_ROOT . '/' . ltrim($naar, '/');
+
+        if (!file_exists($absVan)) {
+            return false;
+        }
+
+        return rename($absVan, $absNaar);
+    }
+
+    // -------------------------------------------------------------------------
+    // Database helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Leest een veldwaarde uit de DB; als die nog leeg is (nieuw artikel, eerste opslag)
+     * valt het terug op de POST-data zodat het ook bij de eerste keer opslaan werkt.
+     */
+    private function leesWaarde(int $artikelId, int $veldId): string
+    {
+        $opgeslagen = $this->leesVeldWaarde($artikelId, $veldId);
+        if ($opgeslagen !== '') {
+            return $opgeslagen;
+        }
+
+        // Fallback: POST-data (Joomla stuurt veldwaarden mee als jcfields[{id}])
+        $jcfields = Factory::getApplication()->input->post->get('jcfields', [], 'ARRAY');
+        return (string) ($jcfields[$veldId] ?? '');
     }
 
     private function leesVeldWaarde(int $artikelId, int $veldId): string
     {
+        if ($veldId === 0) {
+            return '';
+        }
+
         $db    = $this->getDatabase();
         $query = $db->getQuery(true)
             ->select($db->quoteName('value'))
@@ -205,5 +218,52 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
             'item_id'  => $artikelId,
             'value'    => $waarde,
         ]);
+    }
+
+    /** @return array<string, int> veldnaam => veld-ID */
+    private function getVeldIds(): array
+    {
+        $db     = $this->getDatabase();
+        $namen  = [self::FIELD_NUMMER, self::FIELD_LEDEN, self::FIELD_BEPERKT];
+        $quoted = implode(',', array_map([$db, 'quote'], $namen));
+
+        $query = $db->getQuery(true)
+            ->select([$db->quoteName('id'), $db->quoteName('name')])
+            ->from($db->quoteName('#__fields'))
+            ->where($db->quoteName('name') . ' IN (' . $quoted . ')')
+            ->where($db->quoteName('context') . ' = ' . $db->quote('com_content.article'))
+            ->where($db->quoteName('state') . ' = 1');
+
+        $rijen = $db->setQuery($query)->loadObjectList('name');
+        $map   = [];
+        foreach ($rijen as $naam => $rij) {
+            $map[$naam] = (int) $rij->id;
+        }
+
+        return $map;
+    }
+
+    private function isEervolCategorie(int $catid): bool
+    {
+        $db    = $this->getDatabase();
+        $query = $db->getQuery(true)
+            ->select($db->quoteName('alias'))
+            ->from($db->quoteName('#__categories'))
+            ->where($db->quoteName('id') . ' = ' . $catid);
+
+        return $db->setQuery($query)->loadResult() === self::CATEGORY_ALIAS;
+    }
+
+    private function genereerCode(string $invoer): string
+    {
+        $hash = hash_hmac('sha256', $invoer, self::SECRET_KEY, binary: true);
+        $code = '';
+        $len  = strlen(self::ALPHABET);
+
+        for ($i = 0; $i < self::CODE_LENGTH; $i++) {
+            $code .= self::ALPHABET[ord($hash[$i]) % $len];
+        }
+
+        return $code;
     }
 }
