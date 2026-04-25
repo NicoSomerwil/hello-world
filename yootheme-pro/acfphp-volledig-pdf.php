@@ -2,13 +2,18 @@
 /**
  * Yootheme Pro — acfphp element: "Volledige editie (slot)"
  *
- * Plak deze code in een acfphp custom field element in je EERVOL artikeltemplate.
- * Zet dit element ONDER de knop voor de beperkte/vrije PDF.
+ * Plak deze code in een acfphp custom field element in de EERVOL sublayout/artikeltemplate.
+ * Zet dit element NAAST of ONDER de knop voor de beperkte PDF (apart element, altijd zichtbaar).
  *
- * Wat het doet:
- *   - Historische edities (is-openbaar = 1): PDF-knop direct tonen, geen slot.
- *   - Recente edities die al ontgrendeld zijn (sessie): PDF-knop tonen.
- *   - Recente edities zonder sessie: wachtwoordformulier tonen.
+ * Gedrag:
+ *   - Historische editie (is-openbaar = 1) → PDF-knop direct zichtbaar, geen slot
+ *   - Recente editie, sessie al ontgrendeld → PDF-knop direct zichtbaar
+ *   - Recente editie, nog niet ontgrendeld  → slot-knop die een UIkit popup opent
+ *       • Juist wachtwoord → pagina herlaadt, PDF-knop zichtbaar
+ *       • Fout wachtwoord  → popup sluit, pagina herlaadt, slot-knop terug zichtbaar
+ *
+ * Het wachtwoord geldt voor het hele bezoek (browser-sessie).
+ * Eén keer invoeren ontgrendelt alle recente edities tegelijk.
  */
 
 $app        = \Joomla\CMS\Factory::getApplication();
@@ -18,15 +23,15 @@ $isOpenbaar = ($item->jcfields['is-openbaar']->rawvalue ?? '0') === '1';
 $toegang    = $session->get('eervol_toegang', false);
 
 // Pad naar de volledige PDF (document-veld 'leden')
-// Joomla slaat het pad op relatief aan de site-root, bijv. "images/eervol/xxx-volledig.pdf"
+// Joomla slaat het relatieve pad op, bijv. "images/eervol/p1qDjEgRAZ-volledig.pdf"
 $pad    = $item->jcfields['leden']->rawvalue ?? '';
 $pdfUrl = $pad ? (\Joomla\CMS\Uri\Uri::root() . $pad) : '';
 
 if (empty($pdfUrl)) {
-    return ''; // geen PDF ingesteld, niets tonen
+    return ''; // veld 'leden' nog niet ingevuld voor dit artikel
 }
 
-// --- Toegang verleend (openbaar of ontgrendeld) ---
+// --- Toegang verleend: historische editie of sessie al ontgrendeld ---
 if ($isOpenbaar || $toegang) {
     return '
     <a href="' . htmlspecialchars($pdfUrl, ENT_QUOTES) . '"
@@ -35,27 +40,48 @@ if ($isOpenbaar || $toegang) {
     </a>';
 }
 
-// --- Slot: wachtwoordformulier ---
+// --- Slot: knop opent een UIkit modal met het wachtwoordformulier ---
+// Uniek modal-ID per artikel voorkomt conflicten als meerdere edities op één pagina staan.
+$modalId = 'eervol-slot-' . (int) $item->id;
+
 return '
-<div class="uk-card uk-card-default uk-card-body" style="max-width:420px">
-    <h4 class="uk-card-title">
-        <span uk-icon="lock"></span>&nbsp; Exclusief voor leden
-    </h4>
-    <p class="uk-text-small uk-text-muted">
-        Voer het ledenwachtwoord in om de volledige editie te bekijken.
-        Na één keer invoeren bent u voor dit bezoek ontgrendeld — ook voor andere edities.
-    </p>
-    <form method="post" action="">
-        <div class="uk-margin-small">
-            <input class="uk-input"
-                   type="password"
-                   name="eervol_pw"
-                   placeholder="Ledenwachtwoord"
-                   autocomplete="current-password"
-                   required>
+<div>
+    <!-- Slot-knop -->
+    <a class="uk-button uk-button-secondary" href="#' . $modalId . '" uk-toggle>
+        <span uk-icon="lock"></span>&nbsp; Volledige editie (leden)
+    </a>
+
+    <!-- Popup / modal -->
+    <div id="' . $modalId . '" uk-modal>
+        <div class="uk-modal-dialog uk-modal-body">
+            <button class="uk-modal-close-default" type="button" uk-close></button>
+
+            <h3 class="uk-modal-title">
+                <span uk-icon="lock"></span>&nbsp; Exclusief voor leden
+            </h3>
+            <p class="uk-text-muted">
+                Voer het ledenwachtwoord in om de volledige editie te bekijken.<br>
+                <small>Na één keer invoeren bent u voor dit bezoek ontgrendeld — ook voor andere edities.</small>
+            </p>
+
+            <form method="post" action="">
+                <div class="uk-margin">
+                    <input class="uk-input"
+                           type="password"
+                           name="eervol_pw"
+                           placeholder="Ledenwachtwoord"
+                           autocomplete="current-password"
+                           required>
+                </div>
+                <div class="uk-flex uk-flex-between">
+                    <button class="uk-button uk-button-primary" type="submit">
+                        <span uk-icon="unlock"></span>&nbsp; Toegang
+                    </button>
+                    <button class="uk-button uk-button-default uk-modal-close" type="button">
+                        Annuleren
+                    </button>
+                </div>
+            </form>
         </div>
-        <button class="uk-button uk-button-primary" type="submit">
-            <span uk-icon="unlock"></span>&nbsp; Toegang
-        </button>
-    </form>
+    </div>
 </div>';
