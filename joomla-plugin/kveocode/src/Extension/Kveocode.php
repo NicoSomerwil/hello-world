@@ -294,11 +294,11 @@ final class Kveocode extends CMSPlugin implements SubscriberInterface, DatabaseA
                 ->where($db->quoteName('item_id') . ' = ' . $artikelId)
         )->execute();
 
-        $db->insertObject('#__fields_values', (object) [
-            'field_id' => $veldId,
-            'item_id'  => $artikelId,
-            'value'    => $waarde,
-        ]);
+        $rij           = new \stdClass();
+        $rij->field_id = $veldId;
+        $rij->item_id  = $artikelId;
+        $rij->value    = $waarde;
+        $db->insertObject('#__fields_values', $rij);
     }
 
     /** @return array<string, int> veldnaam => veld-ID */
