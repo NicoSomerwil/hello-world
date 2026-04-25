@@ -1,87 +1,130 @@
 <?php
 /**
- * Yootheme Pro — acfphp element: "Volledige editie (slot)"
+ * Yootheme Pro — acfphp element: "EERVOL PDF-toegang"
  *
- * Plak deze code in een acfphp custom field element in de EERVOL sublayout/artikeltemplate.
- * Zet dit element NAAST of ONDER de knop voor de beperkte PDF (apart element, altijd zichtbaar).
+ * Dit is het ENIGE PDF-element dat je nodig hebt in de EERVOL sublayout.
+ * Het vervangt zowel de beperkte als de volledige PDF-knop.
  *
- * Gedrag:
- *   - Historische editie (is-openbaar = 1) → PDF-knop direct zichtbaar, geen slot
- *   - Recente editie, sessie al ontgrendeld → PDF-knop direct zichtbaar
- *   - Recente editie, nog niet ontgrendeld  → slot-knop die een UIkit popup opent
- *       • Juist wachtwoord → pagina herlaadt, PDF-knop zichtbaar
- *       • Fout wachtwoord  → popup sluit, pagina herlaadt, slot-knop terug zichtbaar
+ * Gedrag per situatie:
  *
- * Het wachtwoord geldt voor het hele bezoek (browser-sessie).
- * Eén keer invoeren ontgrendelt alle recente edities tegelijk.
+ *   Historische editie (is-openbaar = 1)
+ *   → Volledige PDF knop direct zichtbaar, geen prompt.
+ *
+ *   Recente editie — nog geen keuze gemaakt (eerste bezoek)
+ *   → Popup verschijnt automatisch met de vraag om de inlogcode.
+ *      Juiste code → sessie 'eervol_toegang' → redirect → volledige PDF knop.
+ *      Leeg of fout → sessie 'eervol_besloten=beperkt' → redirect → beperkte PDF knop.
+ *
+ *   Recente editie — sessie 'eervol_toegang'
+ *   → Volledige PDF knop direct, geen popup meer.
+ *
+ *   Recente editie — sessie 'eervol_besloten=beperkt'
+ *   → Beperkte PDF knop + link "Toch een inlogcode?" om de prompt opnieuw te tonen.
+ *
+ * Eén keer de juiste code invoeren ontgrendelt alle recente edities voor dit bezoek.
  */
 
-$app        = \Joomla\CMS\Factory::getApplication();
-$session    = $app->getSession();
+$app     = \Joomla\CMS\Factory::getApplication();
+$session = $app->getSession();
 
 $isOpenbaar = ($item->jcfields['is-openbaar']->rawvalue ?? '0') === '1';
-$toegang    = $session->get('eervol_toegang', false);
 
-// Pad naar de volledige PDF (document-veld 'leden')
-// Joomla slaat het relatieve pad op, bijv. "images/eervol/p1qDjEgRAZ-volledig.pdf"
-$pad    = $item->jcfields['leden']->rawvalue ?? '';
-$pdfUrl = $pad ? (\Joomla\CMS\Uri\Uri::root() . $pad) : '';
+// PDF-paden (document-veld slaat relatief pad op, bijv. "images/eervol/xxx.pdf")
+$root        = \Joomla\CMS\Uri\Uri::root();
+$padVolledig = $item->jcfields['leden']->rawvalue ?? '';
+$urlVolledig = $padVolledig ? $root . $padVolledig : '';
+$padBeperkt  = $item->jcfields['niet-leden-beperkt']->rawvalue ?? '';
+$urlBeperkt  = $padBeperkt  ? $root . $padBeperkt  : '';
 
-if (empty($pdfUrl)) {
-    return ''; // veld 'leden' nog niet ingevuld voor dit artikel
+// -----------------------------------------------------------------------
+// Historische editie → volledige PDF altijd vrij
+// -----------------------------------------------------------------------
+if ($isOpenbaar) {
+    if (empty($urlVolledig)) return '';
+    return '<a href="' . htmlspecialchars($urlVolledig, ENT_QUOTES) . '"
+               class="uk-button uk-button-primary" target="_blank" rel="noopener">
+               <span uk-icon="file-pdf"></span>&nbsp; Volledige editie bekijken
+            </a>';
 }
 
-// --- Toegang verleend: historische editie of sessie al ontgrendeld ---
-if ($isOpenbaar || $toegang) {
-    return '
-    <a href="' . htmlspecialchars($pdfUrl, ENT_QUOTES) . '"
-       class="uk-button uk-button-primary" target="_blank" rel="noopener">
-        <span uk-icon="file-pdf"></span>&nbsp; Volledige editie bekijken
-    </a>';
+// -----------------------------------------------------------------------
+// Recente editie — juiste code al ingevoerd deze sessie
+// -----------------------------------------------------------------------
+if ($session->get('eervol_toegang', false)) {
+    if (empty($urlVolledig)) return '';
+    return '<a href="' . htmlspecialchars($urlVolledig, ENT_QUOTES) . '"
+               class="uk-button uk-button-primary" target="_blank" rel="noopener">
+               <span uk-icon="file-pdf"></span>&nbsp; Volledige editie bekijken
+            </a>';
 }
 
-// --- Slot: knop opent een UIkit modal met het wachtwoordformulier ---
-// Uniek modal-ID per artikel voorkomt conflicten als meerdere edities op één pagina staan.
+// -----------------------------------------------------------------------
+// Recente editie — eerder leeg/fout ingevuld → beperkte PDF + retry-link
+// -----------------------------------------------------------------------
+if ($session->get('eervol_besloten', '') === 'beperkt') {
+    $resetUrl = \Joomla\CMS\Uri\Uri::current() . '?eervol_reset=1';
+    $html     = '';
+
+    if ($urlBeperkt) {
+        $html .= '<a href="' . htmlspecialchars($urlBeperkt, ENT_QUOTES) . '"
+                     class="uk-button uk-button-default" target="_blank" rel="noopener">
+                     <span uk-icon="file-pdf"></span>&nbsp; Beperkte editie bekijken
+                  </a>';
+    }
+
+    $html .= '<p class="uk-text-small uk-text-muted uk-margin-small-top">
+                  <a href="' . htmlspecialchars($resetUrl, ENT_QUOTES) . '">
+                      <span uk-icon="refresh"></span>&nbsp; Toch een inlogcode? Klik hier.
+                  </a>
+              </p>';
+
+    return $html;
+}
+
+// -----------------------------------------------------------------------
+// Recente editie — eerste bezoek: popup automatisch openen
+// -----------------------------------------------------------------------
 $modalId = 'eervol-slot-' . (int) $item->id;
 
 return '
-<div>
-    <!-- Slot-knop -->
-    <a class="uk-button uk-button-secondary" href="#' . $modalId . '" uk-toggle>
-        <span uk-icon="lock"></span>&nbsp; Volledige editie (leden)
-    </a>
+<div id="' . $modalId . '" uk-modal="bg-close: false; esc-close: false">
+    <div class="uk-modal-dialog uk-modal-body">
 
-    <!-- Popup / modal -->
-    <div id="' . $modalId . '" uk-modal>
-        <div class="uk-modal-dialog uk-modal-body">
-            <button class="uk-modal-close-default" type="button" uk-close></button>
+        <h3 class="uk-modal-title">EERVOL &mdash; Volledige editie</h3>
 
-            <h3 class="uk-modal-title">
-                <span uk-icon="lock"></span>&nbsp; Exclusief voor leden
-            </h3>
-            <p class="uk-text-muted">
-                Voer het ledenwachtwoord in om de volledige editie te bekijken.<br>
-                <small>Na één keer invoeren bent u voor dit bezoek ontgrendeld — ook voor andere edities.</small>
-            </p>
+        <p>Vul hier de inlogcode in om de volledige editie te bekijken.<br>
+           <span class="uk-text-small uk-text-muted">
+               Heb je geen inlogcode? Laat het veld leeg en klik op <strong>OK</strong>.
+               Je ziet dan de beperkte versie.
+           </span>
+        </p>
 
-            <form method="post" action="">
-                <div class="uk-margin">
-                    <input class="uk-input"
-                           type="password"
-                           name="eervol_pw"
-                           placeholder="Ledenwachtwoord"
-                           autocomplete="current-password"
-                           required>
-                </div>
-                <div class="uk-flex uk-flex-between">
-                    <button class="uk-button uk-button-primary" type="submit">
-                        <span uk-icon="unlock"></span>&nbsp; Toegang
-                    </button>
-                    <button class="uk-button uk-button-default uk-modal-close" type="button">
-                        Annuleren
-                    </button>
-                </div>
-            </form>
-        </div>
+        <form method="post" action="">
+            <input type="hidden" name="eervol_form_submitted" value="1">
+
+            <div class="uk-margin">
+                <input class="uk-input"
+                       type="password"
+                       name="eervol_pw"
+                       placeholder="Inlogcode (optioneel)"
+                       autocomplete="off">
+            </div>
+
+            <div class="uk-flex uk-flex-between uk-flex-middle">
+                <button class="uk-button uk-button-primary" type="submit">
+                    OK
+                </button>
+                <span class="uk-text-small uk-text-muted">
+                    Leeg laten = beperkte versie
+                </span>
+            </div>
+        </form>
+
     </div>
-</div>';
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        UIkit.modal(document.getElementById("' . $modalId . '")).show();
+    });
+</script>';
