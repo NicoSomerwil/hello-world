@@ -21,8 +21,6 @@
 defined('_JEXEC') or die;
 
 use Joomla\CMS\Factory;
-use Joomla\CMS\HTML\HTMLHelper;
-use Joomla\CMS\Module\Helper as ModuleHelper;
 use Joomla\CMS\Session\Session;
 use Joomla\CMS\Uri\Uri;
 
@@ -126,4 +124,4 @@ $heeftToegang = (bool) $session->get('eervol_toegang', false);
 $besloten     = (string) $session->get('eervol_besloten', '');
 $modalId      = 'eervol-slot-' . $artikelId;
 
-require ModuleHelper::getLayoutPath('mod_eervolgate', $params->get('layout', 'default'));
+require __DIR__ . '/tmpl/default.php';

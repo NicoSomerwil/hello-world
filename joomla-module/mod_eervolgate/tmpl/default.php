@@ -13,7 +13,7 @@
 
 defined('_JEXEC') or die;
 
-use Joomla\CMS\HTML\HTMLHelper;
+use Joomla\CMS\Session\Session;
 use Joomla\CMS\Uri\Uri;
 
 // -----------------------------------------------------------------------
@@ -88,7 +88,7 @@ endif;
         </p>
 
         <form method="post" action="">
-            <?= HTMLHelper::_('form.token') ?>
+            <input type="hidden" name="<?= Session::getFormToken() ?>" value="1">
             <input type="hidden" name="eervol_form_submitted" value="1">
 
             <div class="uk-margin">
