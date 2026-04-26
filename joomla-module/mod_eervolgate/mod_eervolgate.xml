@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension type="module" client="site" method="upgrade">
+    <name>mod_eervolgate</name>
+    <author>KVEO</author>
+    <version>1.0.0</version>
+    <description>EERVOL PDF-toegangspoort. Toont de juiste PDF-knop op basis van sessie en publicatiedatum. Verwerkt ook de inlogcode-POST zelf.</description>
+    <files>
+        <filename module="mod_eervolgate">mod_eervolgate.php</filename>
+        <folder>tmpl</folder>
+    </files>
+    <config>
+        <fields name="params">
+            <fieldset name="basic">
+                <field
+                    name="inlogcode"
+                    type="text"
+                    label="KVEO inlogcode"
+                    description="De inlogcode die leden invoeren om de volledige editie te zien."
+                    required="true"
+                />
+                <field
+                    name="maanden_openbaar"
+                    type="number"
+                    label="Maanden tot openbaar"
+                    description="Na hoeveel maanden wordt de volledige editie vrij toegankelijk? Standaard: 6."
+                    default="6"
+                    required="true"
+                />
+            </fieldset>
+        </fields>
+    </config>
+</extension>
