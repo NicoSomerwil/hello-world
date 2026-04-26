@@ -3,40 +3,34 @@
  * Joomla acfphp custom field — "EERVOL PDF-toegang"
  *
  * LET OP: plak in het acfphp-veld ALLEEN de code ZONDER deze <?php openingstag
- * en ZONDER dit comment-blok. Het acfphp-veld voert de code zelf uit als PHP;
- * een extra <?php tag veroorzaakt "syntax error, unexpected token '<'".
+ * en ZONDER dit comment-blok.
  *
  * Kopieer dus alles vanaf "$app = ..." hieronder tot het einde van het bestand.
  *
- * Gedrag per situatie:
+ * Artikel-ID wordt bepaald via (in volgorde):
+ *   1. $item->id          — beschikbaar in Single template context
+ *   2. URL-param id       — standaard com_content-route (?id=XX)
+ *   3. URL-param artikel_id — aangepaste page-route (?artikel_id=XX)
  *
- *   Historische editie (is-openbaar = 1)
- *   → Volledige PDF knop direct zichtbaar, geen prompt.
+ * Voor Switcher Pro / Page-aanpak: voeg ?artikel_id=XX toe aan elke kaartlink.
  *
- *   Recente editie — nog geen keuze gemaakt (eerste bezoek)
- *   → Popup verschijnt automatisch met de vraag om de inlogcode.
- *      Juiste code → sessie 'eervol_toegang' → redirect → volledige PDF knop.
- *      Leeg of fout → sessie 'eervol_besloten=beperkt' → redirect → beperkte PDF knop.
- *
- *   Recente editie — sessie 'eervol_toegang'
- *   → Volledige PDF knop direct, geen popup meer.
- *
- *   Recente editie — sessie 'eervol_besloten=beperkt'
- *   → Beperkte PDF knop + link "Toch een inlogcode?" om de prompt opnieuw te tonen.
- *
- * Eén keer de juiste code invoeren ontgrendelt alle recente edities voor dit bezoek.
- *
- * Vereist: plugin eervolslot (verwerkt form-POST, zet sessie, doet redirect).
+ * POST-verwerking (sessie zetten + redirect) wordt gedaan door de eervolslot-plugin.
  */
 
 // ---- BEGIN: dit gedeelte plak je in het acfphp-veld ----
 
 $app     = \Joomla\CMS\Factory::getApplication();
 $session = $app->getSession();
+$input   = $app->getInput();
 
-// $item->jcfields is niet gegarandeerd gevuld in YOOtheme Pro template context.
-// Gebruik directe DB-query op artikelId (die wél beschikbaar is via $item->id).
+// Artikel-ID: probeer achtereenvolgens drie bronnen
 $artikelId = (int) ($item->id ?? 0);
+if ($artikelId === 0) {
+    $artikelId = $input->getInt('id', 0);
+}
+if ($artikelId === 0) {
+    $artikelId = $input->getInt('artikel_id', 0);
+}
 if ($artikelId === 0) return '';
 
 $db = \Joomla\CMS\Factory::getDbo();
@@ -50,16 +44,15 @@ $leesVeld = function(string $naam) use ($db, $artikelId): string {
             $db->quoteName('#__fields', 'f')
                 . ' ON ' . $db->quoteName('f.id') . ' = ' . $db->quoteName('fv.field_id')
         )
-        ->where($db->quoteName('f.name')    . ' = ' . $db->quote($naam))
-        ->where($db->quoteName('f.context') . ' = ' . $db->quote('com_content.article'))
+        ->where($db->quoteName('f.name')     . ' = ' . $db->quote($naam))
+        ->where($db->quoteName('f.context')  . ' = ' . $db->quote('com_content.article'))
         ->where($db->quoteName('fv.item_id') . ' = ' . $artikelId);
-
     return (string) ($db->setQuery($query)->loadResult() ?? '');
 };
 
 // Document-velden slaan JSON op: {"file":"images/eervol/...","linktext":"..."}
 $parseerPad = function(string $waarde): string {
-    if (empty($waarde)) return '';
+    if ($waarde === '') return '';
     $decoded = json_decode($waarde, true);
     if (is_array($decoded)) {
         return (string) ($decoded['file'] ?? $decoded['src'] ?? $decoded['value'] ?? $decoded['path'] ?? '');
@@ -67,15 +60,20 @@ $parseerPad = function(string $waarde): string {
     return $waarde;
 };
 
-$isOpenbaar  = $leesVeld('is-openbaar') === '1';
+// Publicatiedatum ophalen voor de 6-maanden-regel (vervangt het is-openbaar veld)
+$pubQuery  = $db->getQuery(true)
+    ->select($db->quoteName('publish_up'))
+    ->from($db->quoteName('#__content'))
+    ->where($db->quoteName('id') . ' = ' . $artikelId);
+$publishUp  = (string) ($db->setQuery($pubQuery)->loadResult() ?? '');
+$isOpenbaar = $publishUp !== '' && strtotime($publishUp) < strtotime('-6 months');
+
 $root        = \Joomla\CMS\Uri\Uri::root();
-$padVolledig = $parseerPad($leesVeld('leden'));
-$urlVolledig = $padVolledig ? $root . $padVolledig : '';
-$padBeperkt  = $parseerPad($leesVeld('niet-leden-beperkt'));
-$urlBeperkt  = $padBeperkt  ? $root . $padBeperkt  : '';
+$urlVolledig = ($p = $parseerPad($leesVeld('leden')))              ? $root . $p : '';
+$urlBeperkt  = ($p = $parseerPad($leesVeld('niet-leden-beperkt'))) ? $root . $p : '';
 
 // -----------------------------------------------------------------------
-// Historische editie → volledige PDF altijd vrij
+// Historische editie (ouder dan 6 maanden) → volledige PDF altijd vrij
 // -----------------------------------------------------------------------
 if ($isOpenbaar) {
     if (empty($urlVolledig)) return '';
@@ -86,7 +84,7 @@ if ($isOpenbaar) {
 }
 
 // -----------------------------------------------------------------------
-// Recente editie — juiste code al ingevoerd deze sessie
+// Recente editie — juiste inlogcode al ingevoerd deze sessie
 // -----------------------------------------------------------------------
 if ($session->get('eervol_toegang', false)) {
     if (empty($urlVolledig)) return '';
@@ -100,18 +98,22 @@ if ($session->get('eervol_toegang', false)) {
 // Recente editie — eerder leeg/fout ingevuld → beperkte PDF + retry-link
 // -----------------------------------------------------------------------
 if ($session->get('eervol_besloten', '') === 'beperkt') {
-    $resetUrl = \Joomla\CMS\Uri\Uri::current() . '?eervol_reset=1';
-    $html     = '';
+    $resetUri = clone \Joomla\CMS\Uri\Uri::getInstance();
+    $resetUri->setVar('eervol_reset', '1');
+    $html = '';
 
     if ($urlBeperkt) {
-        $html .= '<a href="' . htmlspecialchars($urlBeperkt, ENT_QUOTES) . '"
+        $html .= '<p class="uk-text-small uk-text-muted uk-margin-remove-bottom">
+                      Dit is de beperkte versie van deze editie.
+                  </p>
+                  <a href="' . htmlspecialchars($urlBeperkt, ENT_QUOTES) . '"
                      class="uk-button uk-button-default" target="_blank" rel="noopener">
                      <span uk-icon="file-pdf"></span>&nbsp; Beperkte editie bekijken
                   </a>';
     }
 
     $html .= '<p class="uk-text-small uk-text-muted uk-margin-small-top">
-                  <a href="' . htmlspecialchars($resetUrl, ENT_QUOTES) . '">
+                  <a href="' . htmlspecialchars($resetUri->toString(), ENT_QUOTES) . '">
                       <span uk-icon="refresh"></span>&nbsp; Toch een inlogcode? Klik hier.
                   </a>
               </p>';
@@ -120,7 +122,7 @@ if ($session->get('eervol_besloten', '') === 'beperkt') {
 }
 
 // -----------------------------------------------------------------------
-// Recente editie — eerste bezoek: popup automatisch openen
+// Eerste bezoek — popup automatisch openen
 // -----------------------------------------------------------------------
 $modalId = 'eervol-slot-' . $artikelId;
 
@@ -163,6 +165,6 @@ return '
 
 <script>
     document.addEventListener("DOMContentLoaded", function () {
-        UIkit.modal(document.getElementById("' . $modalId . '")).show();
+        UIkit.modal(document.getElementById(' . json_encode($modalId) . ')).show();
     });
 </script>';
