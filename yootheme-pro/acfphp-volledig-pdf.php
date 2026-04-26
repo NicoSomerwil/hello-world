@@ -25,6 +25,8 @@
  *   → Beperkte PDF knop + link "Toch een inlogcode?" om de prompt opnieuw te tonen.
  *
  * Eén keer de juiste code invoeren ontgrendelt alle recente edities voor dit bezoek.
+ *
+ * Vereist: plugin eervolslot (verwerkt form-POST, zet sessie, doet redirect).
  */
 
 // ---- BEGIN: dit gedeelte plak je in het acfphp-veld ----
@@ -32,10 +34,30 @@
 $app     = \Joomla\CMS\Factory::getApplication();
 $session = $app->getSession();
 
-$isOpenbaar = ($item->jcfields['is-openbaar']->rawvalue ?? '0') === '1';
+// $item->jcfields is niet gegarandeerd gevuld in YOOtheme Pro template context.
+// Gebruik directe DB-query op artikelId (die wél beschikbaar is via $item->id).
+$artikelId = (int) ($item->id ?? 0);
+if ($artikelId === 0) return '';
+
+$db = \Joomla\CMS\Factory::getDbo();
+
+$leesVeld = function(string $naam) use ($db, $artikelId): string {
+    $query = $db->getQuery(true)
+        ->select($db->quoteName('fv.value'))
+        ->from($db->quoteName('#__fields_values', 'fv'))
+        ->join(
+            'INNER',
+            $db->quoteName('#__fields', 'f')
+                . ' ON ' . $db->quoteName('f.id') . ' = ' . $db->quoteName('fv.field_id')
+        )
+        ->where($db->quoteName('f.name')    . ' = ' . $db->quote($naam))
+        ->where($db->quoteName('f.context') . ' = ' . $db->quote('com_content.article'))
+        ->where($db->quoteName('fv.item_id') . ' = ' . $artikelId);
+
+    return (string) ($db->setQuery($query)->loadResult() ?? '');
+};
 
 // Document-velden slaan JSON op: {"file":"images/eervol/...","linktext":"..."}
-// Deze functie extraheert het bestandspad uit JSON of geeft de waarde terug als string.
 $parseerPad = function(string $waarde): string {
     if (empty($waarde)) return '';
     $decoded = json_decode($waarde, true);
@@ -45,10 +67,11 @@ $parseerPad = function(string $waarde): string {
     return $waarde;
 };
 
+$isOpenbaar  = $leesVeld('is-openbaar') === '1';
 $root        = \Joomla\CMS\Uri\Uri::root();
-$padVolledig = $parseerPad($item->jcfields['leden']->rawvalue ?? '');
+$padVolledig = $parseerPad($leesVeld('leden'));
 $urlVolledig = $padVolledig ? $root . $padVolledig : '';
-$padBeperkt  = $parseerPad($item->jcfields['niet-leden-beperkt']->rawvalue ?? '');
+$padBeperkt  = $parseerPad($leesVeld('niet-leden-beperkt'));
 $urlBeperkt  = $padBeperkt  ? $root . $padBeperkt  : '';
 
 // -----------------------------------------------------------------------
@@ -99,7 +122,7 @@ if ($session->get('eervol_besloten', '') === 'beperkt') {
 // -----------------------------------------------------------------------
 // Recente editie — eerste bezoek: popup automatisch openen
 // -----------------------------------------------------------------------
-$modalId = 'eervol-slot-' . (int) $item->id;
+$modalId = 'eervol-slot-' . $artikelId;
 
 return '
 <div id="' . $modalId . '" uk-modal="bg-close: false; esc-close: false">
