@@ -1,9 +1,12 @@
 <?php
 /**
- * Yootheme Pro — acfphp element: "EERVOL PDF-toegang"
+ * Joomla acfphp custom field — "EERVOL PDF-toegang"
  *
- * Dit is het ENIGE PDF-element dat je nodig hebt in de EERVOL sublayout.
- * Het vervangt zowel de beperkte als de volledige PDF-knop.
+ * LET OP: plak in het acfphp-veld ALLEEN de code ZONDER deze <?php openingstag
+ * en ZONDER dit comment-blok. Het acfphp-veld voert de code zelf uit als PHP;
+ * een extra <?php tag veroorzaakt "syntax error, unexpected token '<'".
+ *
+ * Kopieer dus alles vanaf "$app = ..." hieronder tot het einde van het bestand.
  *
  * Gedrag per situatie:
  *
@@ -23,6 +26,8 @@
  *
  * Eén keer de juiste code invoeren ontgrendelt alle recente edities voor dit bezoek.
  */
+
+// ---- BEGIN: dit gedeelte plak je in het acfphp-veld ----
 
 $app     = \Joomla\CMS\Factory::getApplication();
 $session = $app->getSession();
