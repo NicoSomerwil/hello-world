@@ -34,11 +34,21 @@ $session = $app->getSession();
 
 $isOpenbaar = ($item->jcfields['is-openbaar']->rawvalue ?? '0') === '1';
 
-// PDF-paden (document-veld slaat relatief pad op, bijv. "images/eervol/xxx.pdf")
+// Document-velden slaan JSON op: {"file":"images/eervol/...","linktext":"..."}
+// Deze functie extraheert het bestandspad uit JSON of geeft de waarde terug als string.
+$parseerPad = function(string $waarde): string {
+    if (empty($waarde)) return '';
+    $decoded = json_decode($waarde, true);
+    if (is_array($decoded)) {
+        return (string) ($decoded['file'] ?? $decoded['src'] ?? $decoded['value'] ?? $decoded['path'] ?? '');
+    }
+    return $waarde;
+};
+
 $root        = \Joomla\CMS\Uri\Uri::root();
-$padVolledig = $item->jcfields['leden']->rawvalue ?? '';
+$padVolledig = $parseerPad($item->jcfields['leden']->rawvalue ?? '');
 $urlVolledig = $padVolledig ? $root . $padVolledig : '';
-$padBeperkt  = $item->jcfields['niet-leden-beperkt']->rawvalue ?? '';
+$padBeperkt  = $parseerPad($item->jcfields['niet-leden-beperkt']->rawvalue ?? '');
 $urlBeperkt  = $padBeperkt  ? $root . $padBeperkt  : '';
 
 // -----------------------------------------------------------------------
