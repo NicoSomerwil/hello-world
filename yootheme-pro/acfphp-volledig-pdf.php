@@ -147,7 +147,8 @@ return '
                        type="password"
                        name="eervol_pw"
                        placeholder="Inlogcode (optioneel)"
-                       autocomplete="off">
+                       autocomplete="off"
+                       style="padding: 6px 12px; font-size: 1rem; height: 42px;">
             </div>
 
             <div class="uk-flex uk-flex-between uk-flex-middle">
