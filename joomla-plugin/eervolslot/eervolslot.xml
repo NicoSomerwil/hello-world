@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension type="plugin" group="system" method="upgrade">
+    <name>plg_system_eervolslot</name>
+    <author>KVEO</author>
+    <creationDate>2026</creationDate>
+    <version>1.0.0</version>
+    <description>
+        Beheert de toegang tot de volledige (ongekuiste) EERVOL-edities via een gedeeld ledenwachtwoord.
+
+        Werking:
+        - Toont een wachtwoordformulier op de editiepagina (via Yootheme Pro acfphp element).
+        - Na correcte invoer wordt een Joomla-sessievariabele gezet.
+        - Eenmaal ontgrendeld blijft de toegang actief voor het hele bezoek (alle tabbladen).
+        - Het wachtwoord stel je in via Systeem → Plugins → System - EERVOL Slot.
+    </description>
+    <namespace path="src">KveoNl\Plugin\System\Eervolslot</namespace>
+    <config>
+        <fields name="params">
+            <fieldset name="basic">
+                <field
+                    name="wachtwoord"
+                    type="password"
+                    label="Ledenwachtwoord"
+                    description="Het gedeelde wachtwoord dat leden invoeren om de volledige edities te bekijken."
+                    required="true"
+                />
+            </fieldset>
+        </fields>
+    </config>
+    <files>
+        <folder plugin="eervolslot">services</folder>
+        <folder>src</folder>
+    </files>
+</extension>

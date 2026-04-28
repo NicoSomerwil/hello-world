@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension type="plugin" group="content" method="upgrade">
+    <name>plg_content_kveocode</name>
+    <author>KVEO</author>
+    <creationDate>2026</creationDate>
+    <version>2.0.0</version>
+    <description>
+        Beheert PDF-bestanden van EERVOL-artikelen automatisch bij opslaan:
+
+        1. Hernoemt en verplaatst de volledige PDF naar /images/eervol/volledig/E{nr}_{code}.pdf
+        2. Hernoemt en verplaatst de beperkte PDF naar /images/eervol/beperkt/E{nr}_{code}.pdf
+        3. Ruimt /images/eervol/beperkt/ op: bewaart alleen de 3 meest recente edities.
+
+        De twee codes per editie zijn cryptografisch onafhankelijk van elkaar: het kennen
+        van de ene bestandsnaam geeft geen aanwijzing over de andere.
+
+        Werkwijze bij een nieuwe editie:
+          1. Upload beide PDF's met willekeurige naam naar /images/eervol/
+          2. Selecteer ze in de velden 'Leden' en 'NIET-leden (beperkt)' van het artikel
+          3. Sla het artikel op — de plugin doet de rest automatisch
+
+        Vereiste custom fields (context: com_content.article, categorie alias 'eervol'):
+          nummer           integer    Editienummer (1, 2, 3 …)
+          leden            document   Volledige PDF — wordt automatisch hernoemd en verplaatst
+          niet-leden-beperkt document Beperkte PDF  — wordt automatisch hernoemd en verplaatst
+    </description>
+    <namespace path="src">KveoNl\Plugin\Content\Kveocode</namespace>
+    <files>
+        <folder plugin="kveocode">services</folder>
+        <folder>src</folder>
+    </files>
+</extension>
